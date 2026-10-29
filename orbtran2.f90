@@ -30,6 +30,10 @@
 ! Jul. 02, 2026. Add a new option P for MO operations.
 ! Jul. 08, 2026. A typo in Molden [GTO].
 ! Sep. 22, 2026. BDF upgraded the printing of basis functions in ORCA format, so the program has to be revised accordingly.
+! Oct. 03, 2026. RasOrb format used by Columbus MCSCF module, with Dalton (up to l = 5) or Argos (up to l = 4) integrals.
+!                To be tested.
+! Oct. 26, 2026. PUNCH format used by GAMESS-US and Firefly.
+! Oct. 29, 2026. Columbus' RasOrb format using the Argos integral model.
 !
 ! Note
 ! 1) The atoms computed by different programs must be in the same ordering and the same orientation.
@@ -37,7 +41,7 @@
 !    (standard-style) are different.
 ! 3) Symmetry-equivalent atoms are not supported for saving Molekel and Molden files.
 ! 4) Some symmetries may be not supported for ORCA (mkl) since symmetry generators and orientations cannot be well controlled.
-! 5) For BDF, you need to use the GEN() function after the COMPASS-module's GROUP keyword to specify symmetry generators. It is
+! 5) For BDF, you need to use the GEN() function after the COMPASS module's GROUP keyword to specify symmetry generators. It is
 !    not recommended to directly specify the point group name (unless you are familiar with the details of molecular coordinates,
 !    symmetry, and basis contractions), as this may cause unexpected rotation of molecular coordinates. For sf-X2C relativistic
 !    calculations, it may also be necessary to modify the nuclear charge distribution model (NUCLEAR) and the speed of light
@@ -46,27 +50,28 @@
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 program orbtran2
  implicit real(kind=8) (a-h,o-z)
- parameter (nmode=6, ilog=41, imos=42, iopr=43, iorb=51, igto=52, ibas=53, inew=61, iras=62, ibdf=63, imol=64, imkl=65, imdn=66)
+ parameter (nmode=9, ilog=41, imos=42, iopr=43, iorb=51, igto=52, ibas=53, imol=60, ibdf=61, iras=62, imkl=63, icol=64, &
+   iarg=65, igam=66, imdn=70, inew=71)
  character*200 :: ctmp,tag
  logical       :: ifopen
  dimension     :: nbas(8), imode(nmode)
- allocatable   :: cmo(:), occ1(:), occ2(:), scr(:), ibmap(:), irrep(:), infobs(:,:)
+ allocatable   :: cmo(:), occ1(:), occ2(:), scr(:), ibmap(:), irrep(:), infobs(:,:), sclfac(:)
  allocatable   :: infshl(:,:), occtmp(:), cmofull(:,:)    ! required by -mkl & -mdn
 
 !---------------------------------------------------------------------------------------------------------------------------------
 ! 1. read arguments.
 !---------------------------------------------------------------------------------------------------------------------------------
- call RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,istp,nmode,imode,ctmp)
+ call RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,icol,iarg,igam,istp,nmode,imode,ctmp)
 
 !---------------------------------------------------------------------------------------------------------------------------------
 ! 2. check natom, symmetry, and nbas. For mkl, coordinates and basis functions are also read.
 !---------------------------------------------------------------------------------------------------------------------------------
  if(ipro == 0) then
    call chk_molpro(ilog,iorb,natom,nsym,nbas,igrp,istp,tag,ctmp)
-   if(imode(5) == 1 .or. imode(6) == 1) call save_bas_molpro(ilog,ibas,natom,tag,ctmp)
+   if(imode(5) == 1 .or. imode(6) == 1 .or. imode(9) == 1) call save_bas_molpro(ilog,ibas,natom,tag,ctmp)
  else if(ipro == 1) then
    call chk_bdf(ilog,iorb,natom,nsym,nbas,igrp,istp,tag,ctmp)
-   if(imode(5) == 1 .or. imode(6) == 1) call save_bas_bdf(ilog,ibas,natom,tag,ctmp)
+   if(imode(5) == 1 .or. imode(6) == 1 .or. imode(9) == 1) call save_bas_bdf(ilog,ibas,natom,tag,ctmp)
  end if
  close(ilog)
 
@@ -113,11 +118,20 @@ program orbtran2
 
 !---------------------------------------------------------------------------------------------------------------------------------
 ! 6. save a new MO coefficient file
+!    ifmt == 0 Molpro
+!    ifmt == 1 BDF
+!    ifmt == 2 Molcas
+!    ifmt == 3 MKL
+!    ifmt == 4 Columbus(Dalton), disabled
+!    ifmt == 5 Columbus(Argos)
+!    ifmt == 6 Gamess
+!    ifmt ==10 Molden
 !---------------------------------------------------------------------------------------------------------------------------------
  ! molpro/bdf --> molcas
  if(imode(2) == 1) then
-   call symmap(ipro,1,igrp,irrep)
-   call pr_head_ras(iras,nsym,nbas,irrep,ctmp)
+   ifmt = 2
+   call symmap(ipro,ifmt,igrp,irrep)
+   call pr_head_ras(iras,ipro,ifmt,igrp,nsym,nbas,irrep,ctmp)
    loff = 0
    do isym = 1, nsym
      isym1 = irrep(isym)
@@ -128,20 +142,21 @@ program orbtran2
        moff = moff + nbas(i)
        noff = noff + nbas(i)**2
      end do
-     call basmap(natom,maxlq,2,nbas(isym1),infobs(1,moff+1),ibmap)
+     call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
      call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
      ! now MOs saved in scr are in column vector
-     call wr_mos(2,iras,isym,nbas(isym1),scr)
+     call wr_mos(ifmt,iras,isym,nbas(isym1),scr)
      loff = loff + nbas(isym1)
    end do
-   call wr_occ_end(2,iras,ntotbs,nsym,nbas,occ2)
+   call wr_occ_end(ifmt,iras,ntotbs,nsym,nbas,occ2)
    close(iras)
  end if
 
  ! molpro --> bdf
  if(imode(3) == 1) then
-   call symmap(ipro,0,igrp,irrep)
-   call pr_head_new(1,ibdf,ctmp)
+   ifmt = 1
+   call symmap(ipro,ifmt,igrp,irrep)
+   call pr_head_new(ifmt,ibdf,ctmp)
    loff = 0
    do isym = 1, nsym
      isym1 = irrep(isym)
@@ -152,20 +167,21 @@ program orbtran2
        moff = moff + nbas(i)
        noff = noff + nbas(i)**2
      end do
-     call basmap(natom,maxlq,1,nbas(isym1),infobs(1,moff+1),ibmap)
+     call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
      call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
      ! now MOs saved in scr are in column vector
-     call wr_mos(1,ibdf,isym,nbas(isym1),scr)
+     call wr_mos(ifmt,ibdf,isym,nbas(isym1),scr)
      loff = loff + nbas(isym1)
    end do
-   call wr_occ_end(1,ibdf,ntotbs,nsym,nbas,occ2)
+   call wr_occ_end(ifmt,ibdf,ntotbs,nsym,nbas,occ2)
    close(ibdf)
  end if
 
  ! bdf --> molpro
  if(imode(4) == 1) then
-   call symmap(ipro,0,igrp,irrep)
-   call pr_head_new(0,imol,ctmp)
+   ifmt = 0
+   call symmap(ipro,ifmt,igrp,irrep)
+   call pr_head_new(ifmt,imol,ctmp)
    loff = 0
    do isym = 1, nsym
      isym1 = irrep(isym)
@@ -176,28 +192,92 @@ program orbtran2
        moff = moff + nbas(i)
        noff = noff + nbas(i)**2
      end do
-     call basmap(natom,maxlq,0,nbas(isym1),infobs(1,moff+1),ibmap)
+     call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
      call reorderbs(nbas(isym1),.false.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
      ! now MOs saved in scr are in row vector
-     call wr_mos(0,imol,isym,nbas(isym1),scr)
+     call wr_mos(ifmt,imol,isym,nbas(isym1),scr)
      loff = loff + nbas(isym1)
    end do
-   call wr_occ_end(0,imol,ntotbs,nsym,nbas,occ2)
+   call wr_occ_end(ifmt,imol,ntotbs,nsym,nbas,occ2)
    close(imol)
  end if
 
- if(imode(5) == 1 .or. imode(6) == 1) then
+ ! molpro/bdf --> columbus(dalton)
+ if(imode(7) == 1) then
+   write(*,"(/,' Columbus(Dalton): disabled feature.')")
+   ! ...............................................................................................
+   ! 
+   ! Dalton is limited to non-relativistic all-electron integrals.
+   ! The following codes support only sp-functions without symmetrically equivalent atoms; in other
+   ! cases, the normalization factors are not correct.
+   !
+   ! ...............................................................................................
+
+   !ifmt = 4
+   !call symmap(ipro,ifmt,igrp,irrep)
+   !call pr_head_ras(icol,ipro,ifmt,igrp,nsym,nbas,irrep,ctmp)
+   !loff = 0
+   !do isym = 1, nsym
+   !  isym1 = irrep(isym)
+   !  if(nbas(isym1) < 1) cycle
+   !  moff = 0
+   !  noff = 0
+   !  do i = 1, isym1-1
+   !    moff = moff + nbas(i)
+   !    noff = noff + nbas(i)**2
+   !  end do
+   !  call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
+   !  call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
+   !  ! now MOs saved in scr are in column vector
+   !  call wr_mos(ifmt,icol,isym,nbas(isym1),scr)
+   !  loff = loff + nbas(isym1)
+   !end do
+   !call wr_occ_end(ifmt,icol,ntotbs,nsym,nbas,occ2)
+   close(icol)
+ end if
+
+ ! molpro/bdf --> columbus(argos)
+ if(imode(8) == 1) then
+   ifmt = 5
+   call symmap(ipro,ifmt,igrp,irrep)
+   call pr_head_ras(iarg,ipro,ifmt,igrp,nsym,nbas,irrep,ctmp)
+   loff = 0
+   allocate(sclfac(mbas))
+   do isym = 1, nsym
+     isym1 = irrep(isym)
+     if(nbas(isym1) < 1) cycle
+     moff = 0
+     noff = 0
+     do i = 1, isym1-1
+       moff = moff + nbas(i)
+       noff = noff + nbas(i)**2
+     end do
+     call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
+     call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
+     ! Now MOs saved in scr are in column vector.
+     ! Columbus uses non-standard normalization factors, so the MO coefficients need to be scaled.
+     call scalmo_col(nbas(isym1),infobs(1,moff+1),ibmap,sclfac,scr)
+     call wr_mos(ifmt,iarg,isym,nbas(isym1),scr)
+     loff = loff + nbas(isym1)
+   end do
+   deallocate(sclfac)
+   call wr_occ_end(ifmt,iarg,ntotbs,nsym,nbas,occ2)
+   close(iarg)
+ end if
+
+ if(imode(5) == 1 .or. imode(6) == 1 .or. imode(9) == 1) then
    allocate(infshl(2,ntotbs), occtmp(ntotbs), cmofull(ntotbs,ntotbs))    ! ntotbs > nshell is large enough for infshl
  end if
 
  ! molpro/bdf --> molekel
  if(imode(5) == 1) then
+   ifmt = 3
    if(ipro == 0) then
-     call rw_bas_molpro(ibas,imkl,0,maxlq,natom,nshell,infshl,tag,ctmp)
+     call rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    else if(ipro == 1) then
-     call rw_bas_bdf(ibas,imkl,0,maxlq,natom,nshell,infshl,tag,ctmp)
+     call rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    end if
-   call symmap(ipro,2,igrp,irrep)
+   call symmap(ipro,ifmt,igrp,irrep)
    call basmap_mkl(maxlq,nshell,infshl,ntotbs,infobs,ibmap)
    loff = 0
    do isym = 1, nsym
@@ -215,21 +295,52 @@ program orbtran2
    ! now, MOs saved in cmofull are in column vector
 
    ! print MOs in $COEFF_ALPHA & $OCC_ALPHA sections
-   ! MOs are grouped according to inactive, active, and imag.
+   ! MOs will be grouped according to inactive, active, and imag.
    call wr_mos_mkl(imkl,ntotbs,nsym,nbas,occtmp,occ2,cmofull,scr)
-   call wr_occ_end(3,imkl,ntotbs,nsym,nbas,occ2)
+   call wr_occ_end(ifmt,imkl,ntotbs,nsym,nbas,occ2)
    close(imkl)
+ end if
+
+ ! molpro/bdf --> firefly/gamess
+ if(imode(9) == 1) then
+   ifmt = 6
+   if(ipro == 0) then
+     call rw_bas_molpro(ibas,igam,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
+   else if(ipro == 1) then
+     call rw_bas_bdf(ibas,igam,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
+   end if
+   call symmap(ipro,ifmt,igrp,irrep)
+   call basmap_mkl(maxlq,nshell,infshl,ntotbs,infobs,ibmap)
+   loff = 0
+   do isym = 1, nsym
+     isym1 = irrep(isym)
+     if(nbas(isym1) < 1) cycle
+     moff = 0
+     noff = 0
+     do i = 1, isym1-1
+       moff = moff + nbas(i)
+       noff = noff + nbas(i)**2
+     end do
+     call reorderbs_mkl(nbas(isym1),ntotbs,ibmap(moff+1),occ1(moff+1),occtmp(loff+1),cmo(noff+1),cmofull(1,loff+1),scr)
+     loff = loff + nbas(isym1)
+   end do
+   ! now, MOs saved in cmofull are in column vector
+
+   ! MOs will be grouped according to inactive, active, and imag.
+   call wr_mos_gam(igam,ipro,maxlq,nshell,infshl,ntotbs,nsym,nbas,occtmp,occ2,cmofull,scr,ctmp)
+   close(igam)
  end if
 
  ! molpro/bdf --> molden
  if(imode(6) == 1) then
-   if(maxlq > 6) call XError('Only s/p/d/f/g/h functions are supported for Molden format.')
+   if(maxlq > 6) call XError('Only spdfgh-functions are supported for Molden format.')
+   ifmt = 10
    if(ipro == 0) then
-     call rw_bas_molpro(ibas,imdn,1,maxlq,natom,nshell,infshl,tag,ctmp)
+     call rw_bas_molpro(ibas,imdn,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    else if(ipro == 1) then
-     call rw_bas_bdf(ibas,imdn,1,maxlq,natom,nshell,infshl,tag,ctmp)
+     call rw_bas_bdf(ibas,imdn,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    end if
-   call symmap(ipro,2,igrp,irrep)
+   call symmap(ipro,ifmt,igrp,irrep)
    call basmap_mkl(maxlq,nshell,infshl,ntotbs,infobs,ibmap)
    loff = 0
    do isym = 1, nsym
@@ -249,7 +360,7 @@ program orbtran2
    close(imdn)
  end if
 
- if(imode(5) == 1 .or. imode(6) == 1) then
+ if(imode(5) == 1 .or. imode(6) == 1 .or. imode(9) == 1) then
    deallocate(infshl, occtmp, cmofull)
    close(ibas,status='delete')
  end if
@@ -310,6 +421,193 @@ subroutine wr_mos_mdn(imdn,igrp,norb,nsym,nbas,irrep,occ,cmo,symbol)
 
  return
 end subroutine wr_mos_mdn
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+! print MOs in the Gamess PUNCH format.
+! It doesn't work for symmetry equivalent atoms.
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+subroutine wr_mos_gam(igam,ipro,maxlq,nshell,infshl,norb,nsym,nbas,occ1,occ2,cmo,scr,ctmp)
+ implicit double precision (a-h,o-z)
+ parameter(tol=1.0d-20)
+ dimension :: infshl(2,nshell), nbas(nsym), occ1(norb), occ2(norb), cmo(norb,norb), scr(norb,norb)
+ character*(*) ctmp
+ allocatable :: s2cd(:), s2cf(:), s2cg(:), s2ch(:), s2ci(:), cmopure(:), cmocart(:), carmo(:)
+
+ loff = 0
+
+ ! inactive MOs
+ do isym = 1, nsym
+   if(nbas(isym) < 1) cycle
+   moff = 0
+   noff = 0
+   do i = 1, isym-1
+     moff = moff + nbas(i)
+     noff = noff + nbas(i)**2
+   end do
+   do iorb = 1, nbas(isym)
+     if(abs(occ1(moff+iorb)-2.0d0) <= tol) then
+       loff = loff + 1
+       occ2(loff) = occ1(moff+iorb)
+       scr(:,loff) = cmo(:,moff+iorb)
+     end if
+   end do
+ end do
+
+ ! active MOs
+ do isym = 1, nsym
+   if(nbas(isym) < 1) cycle
+   moff = 0
+   noff = 0
+   do i = 1, isym-1
+     moff = moff + nbas(i)
+     noff = noff + nbas(i)**2
+   end do
+   do iorb = 1, nbas(isym)
+     if(abs(occ1(moff+iorb)-2.0d0) > tol .and. abs(occ1(moff+iorb)) > tol) then
+       loff = loff + 1
+       occ2(loff) = occ1(moff+iorb)
+       scr(:,loff) = cmo(:,moff+iorb)
+     end if
+   end do
+ end do
+
+ ! imag. MOs
+ do isym = 1, nsym
+   if(nbas(isym) < 1) cycle
+   moff = 0
+   noff = 0
+   do i = 1, isym-1
+     moff = moff + nbas(i)
+     noff = noff + nbas(i)**2
+   end do
+   do iorb = 1, nbas(isym)
+     if(abs(occ1(moff+iorb)) <= tol) then
+       loff = loff + 1
+       occ2(loff) = occ1(moff+iorb)
+       scr(:,loff) = cmo(:,moff+iorb)
+     end if
+   end do
+ end do
+ if(loff /= norb) call XError("loff .ne. norb in sub. wr_mos_gam")
+
+ if(ipro == 0) then
+   write(igam,"('--- Computed by Molpro and saved by OrbTran-II.')")
+ else if(ipro == 1) then
+   write(igam,"('--- Computed by BDF and saved by OrbTran-II.')")
+ end if
+ call fdate(ctmp)
+ write(igam,"('--- Generated at ',a)") trim(ctmp)
+
+ nsph = 0
+ ncar = 0
+ do ishell = 1, nshell
+   lq = infshl(2,ishell)
+   msph = lq*2 + 1
+   mcar = ((lq+1)*(lq+2))/2
+   nsph = nsph + msph
+   ncar = ncar + mcar
+ end do
+ if(nsph /= norb) call XError("nsph .ne. norb in sub. wr_mos_gam")
+ nline = (ncar+4)/5
+
+ allocate(cmopure(13), cmocart(28), carmo(ncar))
+
+ ! coefficients for sph. to Car. GTF
+ if(maxlq > 2) then
+   allocate(s2cd(5*6), s2cf(7*10), s2cg(9*15), s2ch(11*21), s2ci(13*28))
+   call s2c_coef_gam(maxlq-1,s2cd,s2cf,s2cg,s2ch,s2ci)
+ end if
+
+ write(igam,"(' $VEC')")
+ do iorb = 1, norb
+   ior0 = mod(iorb,100)
+
+   ips = 1
+   ipc = 1
+   do ishell = 1, nshell
+     lq = infshl(2, ishell)
+     msph = lq*2 + 1
+     mcar = ((lq+1)*(lq+2))/2
+     cmopure(1:msph) = scr(ips:ips-1+msph,iorb)
+     call sph2car(lq,s2cd,s2cf,s2cg,s2ch,s2ci,cmopure,cmocart)
+     carmo(ipc:ipc-1+mcar) = cmocart(1:mcar)
+     ips = ips + msph
+     ipc = ipc + mcar
+   end do
+
+   do iline = 1, nline
+     loff = 5*(iline-1)
+     nlin0 = mod(iline,100)
+     write(igam,"(i2,1x,i2,5es15.8)") ior0, nlin0, (carmo(j), j=loff+1, min(loff+5,ncar))
+   end do
+ end do
+ write(igam,"(' $END',/)")
+
+ if(maxlq > 2) then
+   deallocate(s2cd, s2cf, s2cg, s2ch, s2ci)
+ end if
+ deallocate(cmopure, cmocart, carmo)
+
+ return
+end subroutine wr_mos_gam
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+! spherical MO --> Cartesian MO
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Subroutine sph2car(lq,s2cd,s2cf,s2cg,s2ch,s2ci,fi,fo)
+ implicit real(kind=8) (a-h,o-z)
+ dimension :: s2cd(6,5),s2cf(10,7),s2cg(15,9),s2ch(21,11),s2ci(28,13),fi(*),fo(*)
+
+ select case(lq)
+   case(0)    ! S
+     fo(1)=fi(1)
+   case(1)    ! P
+     fo(1:3)=fi(1:3)
+   case(2)    ! D
+     fo(1:6)=0.0d0
+     do j=1,5
+       do i=1,6
+         fo(i)=fo(i)+s2cd(i,j)*fi(j)
+       end do
+     end do
+   case(3)    ! F
+     fo(1:10)=0.0d0
+     do j=1,7
+       do i=1,10
+         fo(i)=fo(i)+s2cf(i,j)*fi(j)
+       end do
+     end do
+   case(4)    ! G
+     fo(1:15)=0.0d0
+     do j=1,9
+       do i=1,15
+         fo(i)=fo(i)+s2cg(i,j)*fi(j)
+       end do
+     end do
+   case(5)    ! H
+     fo(1:21)=0.0d0
+     do j=1,11
+       do i=1,21
+         fo(i)=fo(i)+s2ch(i,j)*fi(j)
+       end do
+     end do
+   case(6)    ! I
+     fo(1:28)=0.0d0
+     do j=1,13
+       do i=1,28
+         fo(i)=fo(i)+s2ci(i,j)*fi(j)
+       end do
+     end do
+   case default
+     call XError("LQ > 6 in sub. sph2car.")
+ end select
+
+ return
+end subroutine sph2car
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
@@ -396,10 +694,10 @@ end subroutine wr_mos_mkl
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! read Molpro's basis functions and save them in Molekel (ifmt=0) or Molden (ifmt=1) format.
+! read Molpro's basis functions and save them in Molekel (ifmt=0), Molden (ifmt=1), or GAMESS (ifmt=2) format.
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
+subroutine rw_bas_molpro(ibas,imkl,ifmt0,maxlq,natom,nshell,infshl,tag,ctmp)
  implicit double precision (a-h,o-z)
  parameter(au2ang=0.529177249d0)
  character*(*) tag,ctmp
@@ -409,6 +707,16 @@ subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
  allocatable   :: iza(:), xyz(:,:)
  allocatable   :: nprims(:), nconts(:), nfunc(:), ioffs(:), iadr(:), minl(:), icent(:)
  allocatable   :: aexp(:), acon(:), scr(:), alq(:)
+
+ if(ifmt0 == 3) then        ! MKL
+   ifmt = 0
+ else if(ifmt0 == 6) then   ! Gamess
+   ifmt = 2
+ else if(ifmt0 ==10) then   ! Molden
+   ifmt = 1
+ else
+   call XError("Unknown ifmt0 in sub. rw_bas_molpro.")
+ end if
 
  allocate(iza(natom), xyz(3,natom))
 
@@ -423,8 +731,9 @@ subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
  end do
  xyz = au2ang * xyz
 
+ call fdate(ctmp)
  if(ifmt == 0) then
-   write(imkl,"('$MKL',/,'#',/,'# MKL format file produced by OrbTran-II.',/,'#')")
+   write(imkl,"('$MKL',/,'#',/,'# MKL format file produced by OrbTran-II. ',a,/,'#')") trim(ctmp)
    write(imkl,"('$CHAR_MULT')")
    write(imkl,"(2i3)") 0, mod(ntot,2)+1
    write(imkl,"('$END')")
@@ -448,7 +757,7 @@ subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
  else if(ifmt == 1) then
    write(imkl,"('[Molden Format]')")
    write(imkl,"('[Title]')")
-   write(imkl,"(' Generated by OrbTran-II.')")
+   write(imkl,"(' Generated by OrbTran-II. ',a)") trim(ctmp)
    write(imkl,"('[N_Atoms]')")
    write(imkl,"(i5)") natom
    write(imkl,"('[Atoms] Angs')")
@@ -461,6 +770,19 @@ subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    if(maxlq > 4) write(imkl,"('[9G]')")
    if(maxlq > 5) write(imkl,"('[11H]')")
    write(imkl,"('[GTO]')")
+ else if(ifmt == 2) then
+   write(imkl,"('Since symmetrically equivalent atoms are unknown, the coordinates in the specific')")
+   write(imkl,"('format cannot be established and thus are not written into the $DATA namelist.')")
+   write(imkl,"(/,'Cartesian coordinates used in this calculation (in Angstrom).',/)")
+   do i = 1, natom
+     call ElemZA(1,atoms,iza(i))
+     write(imkl,"(a3,2x,f5.1,2x,3f18.9)") atoms, dble(iza(i)), xyz(:,i)
+   end do
+   if(ifmt0 == 6) then
+     write(imkl,"(/,' $DATA',/)")
+   else
+     write(imkl,"(/,'$DATA',/)")
+   end if
  end if
 
  tag="# BAS"
@@ -507,7 +829,13 @@ subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
      end if
    end do
    if(iatom0 == 0) call XError('Some atoms have no basis functions!')
-   if(ifmt == 1) write(imkl,"(i4,2x,'0')") iatom
+   if(ifmt == 1) then
+     write(imkl,"(i4,2x,'0')") iatom
+   else if(ifmt == 2) then
+     call elementname(1, ctmp, iza(iatom))
+     call charl2u(ctmp)
+     write(imkl,"(a)") trim(ctmp)
+   end if
    do igrp = 1, ngrp
      if(iatom0 == icent(igrp)) then
        call wr_group(imkl,ifmt,minl(igrp),alq,nprims(igrp),nconts(igrp), aexp(ioffs(igrp)+1),acon(iadr(igrp)))
@@ -524,12 +852,18 @@ subroutine rw_bas_molpro(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
      else
        write(imkl,*)
      end if
-   else if(ifmt == 1) then
+   else if(ifmt == 1 .or. ifmt == 2) then
      write(imkl,*)
    end if
  end do
 
- if(ifmt == 0) write(imkl,"('$END')")
+ if(ifmt == 0 .or. ifmt == 2) then
+   if(ifmt0 == 6) then
+     write(imkl,"(' $END')")
+   else
+     write(imkl,"('$END')")
+   end if
+ end if
  write(imkl,*)
 
  deallocate(iza, xyz)
@@ -541,10 +875,10 @@ end subroutine rw_bas_molpro
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! read BDF's basis functions and save them in Molekel (ifmt=0) or Molden (ifmt=1) format.
+! read BDF's basis functions and save them in Molekel (ifmt=0), Molden (ifmt=1), or GAMESS (ifmt=2) format.
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
+subroutine rw_bas_bdf(ibas,imkl,ifmt0,maxlq,natom,nshell,infshl,tag,ctmp)
  implicit double precision (a-h,o-z)
  parameter(au2ang=0.529177249d0)
  character*(*) tag,ctmp
@@ -554,6 +888,16 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
  allocatable   :: iza(:), xyz(:,:)
  allocatable   :: nconts(:), ioffs(:), minl(:), icent(:)
  allocatable   :: aexp(:), acon(:), scr(:), alq(:)
+
+ if(ifmt0 == 3) then        ! MKL
+   ifmt = 0
+ else if(ifmt0 == 6) then   ! Gamess
+   ifmt = 2
+ else if(ifmt0 ==10) then   ! Molden
+   ifmt = 1
+ else
+   call XError("Unknown ifmt0 in sub. rw_bas_bdf.")
+ end if
 
  allocate(iza(natom), xyz(3,natom))
 
@@ -568,8 +912,9 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
  end do
  xyz = au2ang * xyz
 
+ call fdate(ctmp)
  if(ifmt == 0) then
-   write(imkl,"('$MKL',/,'#',/,'# MKL format file produced by OrbTran-II.',/,'#')")
+   write(imkl,"('$MKL',/,'#',/,'# MKL format file produced by OrbTran-II. ',a,/,'#')") trim(ctmp)
    write(imkl,"('$CHAR_MULT')")
    write(imkl,"(2i3)") 0, mod(ntot,2)+1
    write(imkl,"('$END')")
@@ -593,7 +938,7 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
  else if(ifmt == 1) then
    write(imkl,"('[Molden Format]')")
    write(imkl,"('[Title]')")
-   write(imkl,"(' Generated by OrbTran-II.')")
+   write(imkl,"(' Generated by OrbTran-II. ',a)") trim(ctmp)
    write(imkl,"('[N_Atoms]')")
    write(imkl,"(i5)") natom
    write(imkl,"('[Atoms] Angs')")
@@ -606,6 +951,19 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    if(maxlq > 4) write(imkl,"('[9G]')")
    if(maxlq > 5) write(imkl,"('[11H]')")
    write(imkl,"('[GTO]')")
+ else if(ifmt == 2) then
+   write(imkl,"('Since symmetrically equivalent atoms are unknown, the coordinates in the specific')")
+   write(imkl,"('format cannot be established and thus are not written into the $DATA namelist.')")
+   write(imkl,"(/,'Cartesian coordinates used in this calculation (in Angstrom).',/)")
+   do i = 1, natom
+     call ElemZA(1,atoms,iza(i))
+     write(imkl,"(a3,2x,f5.1,2x,3f18.9)") atoms, dble(iza(i)), xyz(:,i)
+   end do
+   if(ifmt0 == 6) then
+     write(imkl,"(/,' $DATA',/)")
+   else
+     write(imkl,"(/,'$DATA',/)")
+   end if
  end if
 
  tag="# BAS"
@@ -648,7 +1006,7 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
    read(ibas,"(a200)",err=2000,end=2000) ctmp
    ! search the element name
    if(ctmp(1:1) /= ' ' .and. ctmp(2:2) /= ' ' .and. ctmp(3:3) /= ' ') then
-     call elementname(ctmp, izatom)
+     call elementname(0, ctmp, izatom)
      if(izatom == 0) then
        write(*,"(a)") trim(ctmp)
        call XError('Unknown element name in sub. rw_bas_bdf.')
@@ -709,7 +1067,13 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
      end if
    end do
    if(izatom0 == 0) call XError('Some atoms have no basis functions!')
-   if(ifmt == 1) write(imkl,"(i4,2x,'0')") iatom
+   if(ifmt == 1) then
+     write(imkl,"(i4,2x,'0')") iatom
+   else if(ifmt == 2) then
+     call elementname(1, ctmp, iza(iatom))
+     call charl2u(ctmp)
+     write(imkl,"(a)") trim(ctmp)
+   end if
    do ishell = 1, nshell
      if(izatom0 == icent(ishell)) then
        call wr_group(imkl,ifmt,minl(ishell),alq,nconts(ishell),1,aexp(ioffs(ishell)+1),acon(ioffs(ishell)+1))
@@ -723,12 +1087,18 @@ subroutine rw_bas_bdf(ibas,imkl,ifmt,maxlq,natom,nshell,infshl,tag,ctmp)
      else
        write(imkl,*)
      end if
-   else if(ifmt == 1) then
+   else if(ifmt == 1 .or. ifmt == 2) then
      write(imkl,*)
    end if
  end do
 
- if(ifmt == 0) write(imkl,"('$END')")
+ if(ifmt == 0 .or. ifmt == 2) then
+   if(ifmt0 == 6) then
+     write(imkl,"(' $END')")
+   else
+     write(imkl,"('$END')")
+   end if
+ end if
  write(imkl,*)
 
  deallocate(iza, xyz)
@@ -740,7 +1110,7 @@ end subroutine rw_bas_bdf
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! write a basis group in mkl/molden format
+! write a basis group in mkl(ifmt=0)/molden(1)/gamess(2) format
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 subroutine wr_group(imkl,ifmt,lq,alq,np,nc,aexp,acon)
@@ -765,6 +1135,21 @@ subroutine wr_group(imkl,ifmt,lq,alq,np,nc,aexp,acon)
      write(imkl,"(3x,a1,i5,2x,'1.0')") alq(lq), np0
      do ip = 1, np
        if(abs(acon(ip,ic)) > tol) write(imkl,"(2e24.12)") aexp(ip), acon(ip,ic)
+     end do
+   end do
+ else if(ifmt == 2) then
+   do ic = 1, nc
+     np0 = 0
+     do ip = 1, np
+       if(abs(acon(ip,ic)) > tol) np0 = np0 + 1
+     end do
+     write(imkl,"(a1,i5)") alq(lq), np0
+     np0 = 0
+     do ip = 1, np
+       if(abs(acon(ip,ic)) > tol) then
+         np0 = np0 + 1
+         write(imkl,"(i3,2x,2e24.12)") np0, aexp(ip), acon(ip,ic)
+       end if
      end do
    end do
  end if
@@ -798,6 +1183,99 @@ subroutine rd_group(ibas,ifmt,np,nc,aexp,acon,lq,scr)
 
  return
 end subroutine rd_group
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+! scaling factors for Columbus (C2v symmetry)
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+subroutine scalmo_col(nbas,infobs,ibmap,scal,cmo)
+ implicit real(kind=8) (a-h,o-z)
+ dimension infobs(3,nbas), ibmap(nbas), scal(nbas), cmo(nbas,nbas)
+
+ do ibs = 1, nbas
+   jbs = ibmap(ibs)
+   scal(ibs) = fac_col(infobs(2,jbs),infobs(3,jbs))
+ end do
+
+ do ibs = 1, nbas
+   do jbs = 1, nbas
+     cmo(jbs,ibs) = cmo(jbs,ibs) * scal(jbs)
+   end do
+ end do
+
+ return
+
+ contains
+
+! irrep   ml     factor          irrep   ml     factor          irrep   ml     factor
+! -----------------------------  -----------------------------  -----------------------------
+! a1      d0     * 1/sqrt(12)    a2      d2-    * 1             b1/b2   d1+/-  * 1
+!         d2+    * 1/2                                                  f1+/-  * 1/sqrt(40)
+!         f0     * 1/sqrt(60)            f2-    * 1                     f3-    * 1/sqrt(24)
+!         f2+    * 1/2                                                  f3+    *-1/sqrt(24)
+!         g0     *-1/sqrt(6720)          g2-    *-1/sqrt(84)            g1+/-  * 1/sqrt(168)
+!         g2+    *-1/sqrt(336)           g4-    * 1/sqrt(12)            g3-    * 1/sqrt(24)
+!         g4+    * 1/sqrt(192)                                          g3+    *-1/sqrt(24)
+ function fac_col(lq,ml)
+  implicit real(kind=8) (a-h,o-z)
+ 
+  select case(lq)
+    case(1,2)
+      a = 1.0d0
+    case(3)
+      select case(ml)
+        case(0)
+          a = 1.0d0/sqrt(12.0d0)
+        case(2)
+          a = 0.5d0
+        case default
+          a = 1.0d0
+      end select
+    case(4)
+      select case(ml)
+        case(0)
+          a = 1.0d0/sqrt(60.0d0)
+        case(-1,1)
+          a = 1.0d0/sqrt(40.0d0)
+        case(-2)
+          a = 1.0d0
+        case(2)
+          a = 0.5d0
+        case(-3)
+          a = 1.0d0/sqrt(24.0d0)
+        case(3)
+          a =-1.0d0/sqrt(24.0d0)
+      end select
+    case(5)
+      select case(ml)
+        case(0)
+          a =-1.0d0/sqrt(6720.0d0)
+        case(-1,1)
+          a = 1.0d0/sqrt(168.0d0)
+        case(-2)
+          a =-1.0d0/sqrt(84.0d0)
+        case(2)
+          a =-1.0d0/sqrt(336.0d0)
+        case(-3)
+          a = 1.0d0/sqrt(24.0d0)
+        case(3)
+          a =-1.0d0/sqrt(24.0d0)
+        case(-4)
+          a = 1.0d0/sqrt(12.0d0)
+        case(4)
+          a = 1.0d0/sqrt(192.0d0)
+      end select
+    case default
+      call XError('LQ > 5 in func. fac_col.')
+  end select
+ 
+  fac_col = a
+ 
+  return
+ end function fac_col
+
+end subroutine scalmo_col
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
@@ -1218,7 +1696,7 @@ subroutine basmap_mkl(maxlq,nshell,infshl,ntotbs,infobs,ibmap)
  ibs = 0
  do ishell = 1, nshell
    nml = infshl(2,ishell) * 2 + 1
-   call bas_lq_mkl(infshl(2,ishell)+1,lmdat)
+   call bas_lq_order(3,infshl(2,ishell)+1,lmdat)
    do iml = 1, nml
      ml = lmdat(iml)
      do iob = 1, ntotbs
@@ -1240,60 +1718,19 @@ subroutine basmap_mkl(maxlq,nshell,infshl,ntotbs,infobs,ibmap)
  deallocate(iscr, lmdat)
 
  return
-
- contains
-
- ! Lm ordering for Lq. in molekel & molden.
- !
- ! lq   lm
- !---  ---------------------------------------
- ! 1s    0
- ! 2p   +1 -1  0
- ! 3d    0 +1 -1 +2 -2
- ! 4f    0 +1 -1 +2 -2 +3 -3
- ! 5g    0 +1 -1 +2 -2 +3 -3 +4 -4
- ! 6h    0 +1 -1 +2 -2 +3 -3 +4 -4 +5 -5
- ! 7i    0 +1 -1 +2 -2 +3 -3 +4 -4 +5 -5 +6 -6
- subroutine bas_lq_mkl(lq,lm)
-  implicit double precision (a-h,o-z)
-  dimension lm(*)
-
-  select case(lq)
-    case(1)
-      lm (1: 1) = (/ 0/)
-    case(2)
-      lm (1: 3) = (/+1,-1, 0/)
-    case(3)
-      lm (1: 5) = (/ 0,+1,-1,+2,-2/)
-    case(4)
-      lm (1: 7) = (/ 0,+1,-1,+2,-2,+3,-3/)
-    case(5)
-      lm (1: 9) = (/ 0,+1,-1,+2,-2,+3,-3,+4,-4/)
-    case(6)
-      lm (1:11) = (/ 0,+1,-1,+2,-2,+3,-3,+4,-4,+5,-5/)
-    case(7)
-      lm (1:13) = (/ 0,+1,-1,+2,-2,+3,-3,+4,-4,+5,-5,+6,-6/)
-    case default
-      write(*,"(/,i4)") lq
-      call XError("Unknown Lq in sub. bas_lq_mkl!")
-  end select
-
-  return
- end subroutine bas_lq_mkl
-
 end subroutine basmap_mkl
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! map relationship of basis functions. imod = 0: molpro, 1: bdf, 2: molcas
+! map relationship of basis functions. ifmt = 0: molpro, 1: bdf, 2: molcas, 4: columbus(dalton), 5: columbus(argos)
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine basmap(natom,maxlq,imod,nbas,infobs,ibmap)
+subroutine basmap(natom,maxlq,ifmt,nbas,infobs,ibmap)
  implicit double precision (a-h,o-z)
  dimension :: infobs(3,nbas),ibmap(nbas)
  allocatable :: iscr1(:), iscr2(:)
 
- if(imod == 0) allocate(iscr1(maxlq+maxlq-1), iscr2(nbas))
+ allocate(iscr1(maxlq+maxlq-1), iscr2(nbas))
 
  ibmap = 0
 
@@ -1303,14 +1740,16 @@ subroutine basmap(natom,maxlq,imod,nbas,infobs,ibmap)
    if(ista==0 .and. ilen==0) cycle
    ilen = ilen - ista + 1
 
-   if(imod == 0) then
-     call basmap_atm_molpro(maxlq,ilen,ista-1,infobs(1,ista),ibmap(ista),iscr1,iscr2)
-   else if(imod == 1 .or. imod == 2) then
-     call basmap_atm(imod,maxlq,ilen,ista-1,infobs(1,ista),ibmap(ista))
+   if(ifmt == 0 .or. ifmt == 4 .or. ifmt == 5) then
+     call basmap_atm_1(ifmt,maxlq,ilen,ista-1,infobs(1,ista),ibmap(ista),iscr1,iscr2)
+   else if(ifmt == 1 .or. ifmt == 2) then
+     call basmap_atm_2(ifmt,maxlq,ilen,ista-1,infobs(1,ista),ibmap(ista),iscr1)
+   else
+     call XError("Unknown ifmt in sub. basmap!")
    end if
  end do
 
- if(imod == 0) deallocate(iscr1, iscr2)
+ deallocate(iscr1, iscr2)
 
  return
 
@@ -1342,17 +1781,16 @@ subroutine basmap(natom,maxlq,imod,nbas,infobs,ibmap)
   return
  end subroutine getbfa
 
- ! reorder basis functions of an atom according to irrep
- subroutine basmap_atm(imod,maxlq,nbas,noff,infobs,ibmap)
+ ! reorder basis functions of atomic Lq according to ml for all shells (for bdf and molcas)
+ subroutine basmap_atm_2(ifmt,maxlq,nbas,noff,infobs,ibmap,itmp)
   implicit double precision (a-h,o-z)
-  dimension infobs(3,nbas), ibmap(nbas)
+  dimension infobs(3,nbas), ibmap(nbas), itmp(*)
 
   idx = 0
   do lq = 1, maxlq  ! lq = 1 (s), 2 (p), 3 (d), ...
-    do lm = -lq+1, lq-1
-      lm0 = lm
-      ! bdf: py,pz,px, molcas: px,py,pz
-      if(imod == 2 .and. lq == 2) lm0 = molcas_fix_p(lm)
+    call bas_lq_order(ifmt,lq,itmp)
+    do lm = 1, lq+lq-1
+      lm0 = itmp(lm)
       do ibs = 1, nbas
         if(infobs(2,ibs) == lq .and. infobs(3,ibs) == lm0) then
           idx = idx + 1
@@ -1361,20 +1799,20 @@ subroutine basmap(natom,maxlq,imod,nbas,infobs,ibmap)
       end do
     end do
   end do
-  if(idx /= nbas) call XError("idx .ne. nbas in sub. basmap_atm!")
+  if(idx /= nbas) call XError("idx .ne. nbas in sub. basmap_atm_2!")
 
   return
- end subroutine basmap_atm
+ end subroutine basmap_atm_2
 
- ! reorder basis functions of an atom according to Lq
- subroutine basmap_atm_molpro(maxlq,nbas,noff,infobs,ibmap,itmp,inf2)
+ ! reorder basis functions of atomic Lq according to ml in each shell (for molpro and columbus)
+ subroutine basmap_atm_1(ifmt,maxlq,nbas,noff,infobs,ibmap,itmp,inf2)
   implicit double precision (a-h,o-z)
   dimension infobs(3,nbas), ibmap(nbas), itmp(*), inf2(nbas)
 
   idx = 0
   inf2= 0
   do lq = 1, maxlq  ! lq = 1 (s), 2 (p), 3 (d), ...
-    call bas_lq_molpro(lq,itmp)
+    call bas_lq_order(ifmt,lq,itmp)
     loop3 : do while(.true.)
       nbl = 0
       loop2 : do lm = 1, lq+lq-1
@@ -1393,72 +1831,355 @@ subroutine basmap(natom,maxlq,imod,nbas,infobs,ibmap)
       if(nbl == 0) exit loop3    ! no other bs found for lq
     end do loop3
   end do
-  if(idx /= nbas) call XError("idx .ne. nbas in sub. basmap_atm_molpro!")
+  if(idx /= nbas) call XError("idx .ne. nbas in sub. basmap_atm_1!")
 
   return
- end subroutine basmap_atm_molpro
-
- ! Lm ordering for Lq. in Molpro.
- !
- ! lq   lm
- !---  ---------------------------------------
- ! 1s    0
- ! 2p   +1 -1  0
- ! 3d    0 -2 +1 +2 -1
- ! 4f   +1 -1  0 +3 -2 -3 +2
- ! 5g    0 -2 +1 +4 -1 +2 -4 +3 -3
- ! 6h   +1 -1 +2 +3 -4 -3 +4 -5  0 +5 -2
- ! 7i   +6 -2 +5 +4 -5 +2 -6 +3 -4  0 -3 -1 +1
- subroutine bas_lq_molpro(lq,lm)
-  implicit double precision (a-h,o-z)
-  dimension lm(*)
-
-  select case(lq)
-    case(1)
-      lm (1: 1) = (/ 0/)
-    case(2)
-      lm (1: 3) = (/+1,-1, 0/)
-    case(3)
-      lm (1: 5) = (/ 0,-2,+1,+2,-1/)
-    case(4)
-      lm (1: 7) = (/+1,-1, 0,+3,-2,-3,+2/)
-    case(5)
-      lm (1: 9) = (/ 0,-2,+1,+4,-1,+2,-4,+3,-3/)
-    case(6)
-      lm (1:11) = (/+1,-1,+2,+3,-4,-3,+4,-5, 0,+5,-2/)
-    case(7)
-      lm (1:13) = (/+6,-2,+5,+4,-5,+2,-6,+3,-4, 0,-3,-1,+1/)
-    case default
-      write(*,"(/,i4)") lq
-      call XError("Unknown Lq in sub. bas_lq_molpro!")
-  end select
-
-  return
- end subroutine bas_lq_molpro
-
- ! fix the ordering of p-function for Molcas:
- ! py(-1), pz(0), px(+1) --> px(+1), py(-1), pz(0)
- function molcas_fix_p(lqm)
-  implicit real(kind=8) (a-h,o-z)
-
-  select case(lqm)
-    case(-1)
-      lqm0 =  1
-    case(0)
-      lqm0 = -1
-    case(1)
-      lqm0 =  0
-  end select
-  molcas_fix_p = lqm0
-
-  return
- end function molcas_fix_p
+ end subroutine basmap_atm_1
 
 end subroutine basmap
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! print MOs for isym in Molpro orb (ipro = 0), BDF casorb (1), or Molcas rasorb (2) format
+! Coefficients for spherical GTF in Molden ordering to Cartesian GTF in Gamess ordering.
+!
+! Molden ordering of spherical GTF (see sub. bas_lq_order):
+! s   0
+! p  +1 -1  0 (i.e. x y z)
+! d+  0 +1 -1 +2 -2 +3 -3 ...
+!
+! Gamess ordering of Cartesian GTF:
+! d  XX YY ZZ XY XZ YZ (same as Molden)
+! f  XXX YYY ZZZ XXY XXZ YYX YYZ ZZX ZZY XYZ
+! g  XXXX YYYY ZZZZ XXXY XXXZ YYYX YYYZ ZZZX ZZZY XXYY XXZZ YYZZ XXYZ YYXZ ZZXY (same as Molden)
+! h  XXXXX YYYYY ZZZZZ XXXXY XXXXZ YYYYX YYYYZ ZZZZX ZZZZY XXXYY XXXZZ YYYXX YYYZZ ZZZXX ZZZYY XXXYZ YYYXZ ZZZXY XXYYZ XXZZY YYZZX 
+! i      X6     Y6     Z6    X5Y    X5Z    Y5X    Y5Z    Z5X    Z5Y   X4Y2   X4Z2   Y4X2   Y4Z2   Z4X2   Z4Y2   X4YZ   Y4XZ   Z4XY
+!      X3Y3   X3Z3   Y3Z3  X3Y2Z  X3Z2Y  Y3X2Z  Y3Z2X  Z3X2Y  Z3Y2X X2Y2Z2
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Subroutine s2c_coef_gam(MaxL,s2cd,s2cf,s2cg,s2ch,s2ci)
+ implicit real(kind=8) (a-h,o-z)
+ dimension :: s2cd(6,5),s2cf(10,7),s2cg(15,9),s2ch(21,11),s2ci(28,13)
+
+ if(MaxL > 6) call XError("MaxL > 6 in sub. s2c_coef_gam.")
+
+ if(MaxL > 1) then
+   s2cd = 0.0D0
+   s2cd( 1, 1) = -0.5D0
+   s2cd( 2, 1) = -0.5D0
+   s2cd( 3, 1) =  1.0D0
+   s2cd( 5, 2) =  1.0D0
+   s2cd( 6, 3) =  1.0D0
+   s2cd( 1, 4) =  0.8660254037844387D0
+   s2cd( 2, 4) = -0.8660254037844387D0
+   s2cd( 4, 5) =  1.0D0
+ end if
+
+ if(MaxL > 2) then
+   s2cf = 0.0D0
+   s2cf( 3, 1) =  1.0D0
+   s2cf( 5, 1) = -0.6708203932499368D0
+   s2cf( 7, 1) = -0.6708203932499368D0
+   s2cf( 1, 2) = -0.6123724356957946D0
+   s2cf( 6, 2) = -0.2738612787525830D0
+   s2cf( 8, 2) =  0.1095445115010332D1
+   s2cf( 2, 3) = -0.6123724356957946D0
+   s2cf( 4, 3) = -0.2738612787525830D0
+   s2cf( 9, 3) =  0.1095445115010332D1
+   s2cf( 5, 4) =  0.8660254037844386D0
+   s2cf( 7, 4) = -0.8660254037844386D0
+   s2cf(10, 5) =  1.0D0
+   s2cf( 1, 6) =  0.7905694150420949D0
+   s2cf( 6, 6) = -0.1060660171779821D1
+   s2cf( 2, 7) = -0.7905694150420949D0
+   s2cf( 4, 7) =  0.1060660171779821D1
+ end if
+
+ if(MaxL > 3) then
+   s2cg = 0.0D0
+   s2cg( 1, 1) =  0.375D0
+   s2cg( 2, 1) =  0.375D0
+   s2cg( 3, 1) =  1.0D0
+   s2cg(10, 1) =  0.2195775164134200D0
+   s2cg(11, 1) = -0.8783100656536799D0
+   s2cg(12, 1) = -0.8783100656536799D0
+   s2cg( 5, 2) = -0.8964214570007953D0
+   s2cg( 8, 2) =  0.1195228609334394D1
+   s2cg(14, 2) = -0.4008918628686366D0
+   s2cg( 7, 3) = -0.8964214570007953D0
+   s2cg( 9, 3) =  0.1195228609334394D1
+   s2cg(13, 3) = -0.4008918628686366D0
+   s2cg( 1, 4) = -0.5590169943749475D0
+   s2cg( 2, 4) =  0.5590169943749475D0
+   s2cg(11, 4) =  0.9819805060619659D0
+   s2cg(12, 4) = -0.9819805060619659D0
+   s2cg( 4, 5) = -0.4225771273642583D0
+   s2cg( 6, 5) = -0.4225771273642583D0
+   s2cg(15, 5) =  0.1133893419027682D1
+   s2cg( 5, 6) =  0.7905694150420950D0
+   s2cg(14, 6) = -0.1060660171779821D1
+   s2cg( 7, 7) = -0.7905694150420950D0
+   s2cg(13, 7) =  0.1060660171779821D1
+   s2cg( 1, 8) =  0.7395099728874520D0
+   s2cg( 2, 8) =  0.7395099728874520D0
+   s2cg(10, 8) = -0.1299038105676658D1
+   s2cg( 4, 9) =  0.1118033988749895D1
+   s2cg( 6, 9) = -0.1118033988749895D1
+ end if
+
+ if(MaxL > 4) then
+   s2ch = 0.0D0
+   s2ch( 3, 1) =  1.0D0
+   s2ch( 5, 1) =  0.625D0
+   s2ch( 7, 1) =  0.625D0
+   s2ch(14, 1) = -0.1091089451179962D1
+   s2ch(15, 1) = -0.1091089451179962D1
+   s2ch(19, 1) =  0.3659625273557000D0
+   s2ch( 1, 2) =  0.4841229182759271D0
+   s2ch( 6, 2) =  0.1613743060919757D0
+   s2ch( 8, 2) =  0.1290994448735806D1
+   s2ch(10, 2) =  0.2112885636821291D0
+   s2ch(11, 2) = -0.1267731382092775D1
+   s2ch(21, 2) = -0.5669467095138409D0
+   s2ch( 2, 3) =  0.4841229182759271D0
+   s2ch( 4, 3) =  0.1613743060919757D0
+   s2ch( 9, 3) =  0.1290994448735806D1
+   s2ch(12, 3) =  0.2112885636821291D0
+   s2ch(13, 3) = -0.1267731382092775D1
+   s2ch(20, 3) = -0.5669467095138409D0
+   s2ch( 5, 4) = -0.8539125638299665D0
+   s2ch( 7, 4) =  0.8539125638299665D0
+   s2ch(14, 4) =  0.1118033988749895D1
+   s2ch(15, 4) = -0.1118033988749895D1
+   s2ch(16, 5) = -0.6454972243679028D0
+   s2ch(17, 5) = -0.6454972243679028D0
+   s2ch(18, 5) =  0.1290994448735806D1
+   s2ch( 1, 6) = -0.5229125165837972D0
+   s2ch( 6, 6) =  0.5229125165837972D0
+   s2ch(10, 6) =  0.2282177322938193D0
+   s2ch(11, 6) =  0.9128709291752768D0
+   s2ch(21, 6) = -0.1224744871391589D1
+   s2ch( 2, 7) =  0.5229125165837972D0
+   s2ch( 4, 7) = -0.5229125165837972D0
+   s2ch(12, 7) = -0.2282177322938193D0
+   s2ch(13, 7) = -0.9128709291752768D0
+   s2ch(20, 7) =  0.1224744871391589D1
+   s2ch( 5, 8) =  0.7395099728874520D0
+   s2ch( 7, 8) =  0.7395099728874520D0
+   s2ch(19, 8) = -0.1299038105676658D1
+   s2ch(16, 9) =  0.1118033988749895D1
+   s2ch(17, 9) = -0.1118033988749895D1
+   s2ch( 1, 1) =  0.7015607600201140D0
+   s2ch( 6,10) =  0.1169267933366857D1
+   s2ch(10,10) = -0.1530931089239486D1
+   s2ch( 2,11) =  0.7015607600201140D0
+   s2ch( 4,11) =  0.1169267933366857D1
+   s2ch(12,11) = -0.1530931089239486D1
+ end if
+
+ if(MaxL > 5) then
+   s2ci = 0.0D0
+   s2ci( 1, 1) = -0.3125D0
+   s2ci( 2, 1) = -0.3125D0
+   s2ci( 3, 1) =  1.0D0
+   s2ci(10, 1) = -0.1631978024584667D0
+   s2ci(11, 1) =  0.9791868147508005D0
+   s2ci(12, 1) = -0.1631978024584667D0
+   s2ci(13, 1) =  0.9791868147508005D0
+   s2ci(14, 1) = -0.1305582419667734D1
+   s2ci(15, 1) = -0.1305582419667734D1
+   s2ci(28, 1) =  0.5733530903673288D0
+   s2ci( 5, 2) =  0.8635615996346968D0
+   s2ci( 8, 2) =  0.1381698559415514D1
+   s2ci(17, 2) =  0.2878538665448990D0
+   s2ci(20, 2) = -0.1685499656158105D1
+   s2ci(22, 2) =  0.3768891807222045D0
+   s2ci(27, 2) = -0.7537783614444090D0
+   s2ci( 7, 3) =  0.8635615996346968D0
+   s2ci( 9, 3) =  0.1381698559415514D1
+   s2ci(16, 3) =  0.2878538665448990D0
+   s2ci(21, 3) = -0.1685499656158105D1
+   s2ci(24, 3) =  0.3768891807222045D0
+   s2ci(26, 3) = -0.7537783614444090D0
+   s2ci( 1, 4) =  0.4528555233184200D0
+   s2ci( 2, 4) = -0.4528555233184200D0
+   s2ci(10, 4) =  0.0788320279858614D0
+   s2ci(11, 4) = -0.1261312447773783D1
+   s2ci(12, 4) = -0.0788320279858614D0
+   s2ci(13, 4) =  0.1261312447773783D1
+   s2ci(14, 4) =  0.1261312447773783D1
+   s2ci(15, 4) = -0.1261312447773783D1
+   s2ci( 4, 5) =  0.2730821554704072D0
+   s2ci( 6, 5) =  0.2730821554704072D0
+   s2ci(18, 5) =  0.1456438162508839D1
+   s2ci(19, 5) =  0.2665008954445131D0
+   s2ci(23, 5) = -0.9534625892455925D0
+   s2ci(25, 5) = -0.9534625892455925D0
+   s2ci( 5, 6) = -0.8192464664112216D0
+   s2ci(17, 6) =  0.8192464664112215D0
+   s2ci(20, 6) =  0.1066003581778052D1
+   s2ci(22, 6) =  0.3575484709670971D0
+   s2ci(27, 6) = -0.1430193883868389D1
+   s2ci( 7, 7) =  0.8192464664112216D0
+   s2ci(16, 7) = -0.8192464664112215D0
+   s2ci(21, 7) = -0.1066003581778052D1
+   s2ci(24, 7) = -0.3575484709670971D0
+   s2ci(26, 7) =  0.1430193883868389D1
+   s2ci( 1, 8) = -0.4960783708246108D0
+   s2ci( 2, 8) = -0.4960783708246108D0
+   s2ci(10, 8) =  0.4317807998173485D0
+   s2ci(11, 8) =  0.8635615996346969D0
+   s2ci(12, 8) =  0.4317807998173485D0
+   s2ci(13, 8) =  0.8635615996346969D0
+   s2ci(28, 8) = -0.1516949690542295D1
+   s2ci( 4, 9) = -0.5982930264130993D0
+   s2ci( 6, 9) =  0.5982930264130993D0
+   s2ci(23, 9) =  0.1305582419667734D1
+   s2ci(25, 9) = -0.1305582419667734D1
+   s2ci( 5,10) =  0.7015607600201141D0
+   s2ci(17,10) =  0.1169267933366857D1
+   s2ci(22,10) = -0.1530931089239487D1
+   s2ci( 7,11) =  0.7015607600201141D0
+   s2ci(16,11) =  0.1169267933366857D1
+   s2ci(24,11) = -0.1530931089239487D1
+   s2ci( 1,12) =  0.6716932893813962D0
+   s2ci( 2,12) = -0.6716932893813962D0
+   s2ci(10,12) = -0.1753901900050285D1
+   s2ci(12,12) =  0.1753901900050285D1
+   s2ci( 4,13) =  0.1215138880951474D1
+   s2ci( 6,13) =  0.1215138880951474D1
+   s2ci(19,13) = -0.1976423537605237D1
+ end if
+
+ return
+end subroutine s2c_coef_gam
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+! Lm ordering for a given Lq.
+!
+! Ordering of Molpro.
+!---  ---------------------------------------
+! lq   lm
+!---  ---------------------------------------
+! 1s    0
+! 2p   +1 -1  0
+! 3d    0 -2 +1 +2 -1
+! 4f   +1 -1  0 +3 -2 -3 +2
+! 5g    0 -2 +1 +4 -1 +2 -4 +3 -3
+! 6h   +1 -1 +2 +3 -4 -3 +4 -5  0 +5 -2
+! 7i   +6 -2 +5 +4 -5 +2 -6 +3 -4  0 -3 -1 +1
+!
+! Ordering of Molekel, Molden, and Columbus(argos).
+!---  ---------------------------------------
+! lq   lm
+!---  ---------------------------------------
+! 1s    0
+! 2p   +1 -1  0                                 Columbus:  0 +1 -1
+! 3d    0 +1 -1 +2 -2
+! 4f    0 +1 -1 +2 -2 +3 -3
+! 5g    0 +1 -1 +2 -2 +3 -3 +4 -4               Columbus:  0 +1 -1 -2 +2 +3 -3 +4 -4
+! 6h    0 +1 -1 +2 -2 +3 -3 +4 -4 +5 -5
+! 7i    0 +1 -1 +2 -2 +3 -3 +4 -4 +5 -5 +6 -6
+!
+! Ordering of BDF, Molcas, and Columbus(Dalton).
+!---  ---------------------------------------
+! lq   lm
+!---  ---------------------------------------
+! 1s    0
+! 2p   +1 -1  0        BDF:  -1 0 +1
+! 3d   -2 -1  0 +1 +2
+! 4f   -3 -2 -1  0 +1 +2 +3
+! 5g   -4 -3 -2 -1  0 +1 +2 +3 +4
+! 6h   -5 -4 -3 -2 -1  0 +1 +2 +3 +4 +5
+! 7i   -6 -5 -4 -3 -2 -1  0 +1 +2 +3 +4 +5 +6
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+subroutine bas_lq_order(iprog,lq,lm)
+ implicit double precision (a-h,o-z)
+ dimension lm(*)
+
+ if(iprog == 0) then
+   select case(lq)
+     case(1)
+       lm (1: 1) = (/ 0/)
+     case(2)
+       lm (1: 3) = (/+1,-1, 0/)
+     case(3)
+       lm (1: 5) = (/ 0,-2,+1,+2,-1/)
+     case(4)
+       lm (1: 7) = (/+1,-1, 0,+3,-2,-3,+2/)
+     case(5)
+       lm (1: 9) = (/ 0,-2,+1,+4,-1,+2,-4,+3,-3/)
+     case(6)
+       lm (1:11) = (/+1,-1,+2,+3,-4,-3,+4,-5, 0,+5,-2/)
+     case(7)
+       lm (1:13) = (/+6,-2,+5,+4,-5,+2,-6,+3,-4, 0,-3,-1,+1/)
+     case default
+       write(*,"(/,i4)") lq
+       call XError("Unknown Lq in sub. bas_lq_order!")
+   end select
+ else if(iprog == 3 .or. iprog == 5) then
+   select case(lq)
+     case(1)
+       lm (1: 1) = (/ 0/)
+     case(2)
+       if(iprog == 3) then
+         lm (1: 3) = (/+1,-1, 0/)
+       else
+         lm (1: 3) = (/ 0,+1,-1/)
+       end if
+     case(3)
+       lm (1: 5) = (/ 0,+1,-1,+2,-2/)
+     case(4)
+       lm (1: 7) = (/ 0,+1,-1,+2,-2,+3,-3/)
+     case(5)
+       if(iprog == 3) then
+         lm (1: 9) = (/ 0,+1,-1,+2,-2,+3,-3,+4,-4/)
+       else if(iprog == 5) then
+         lm (1: 9) = (/ 0,+1,-1,-2,+2,+3,-3,+4,-4/)
+       end if
+     case(6)
+       lm (1:11) = (/ 0,+1,-1,+2,-2,+3,-3,+4,-4,+5,-5/)
+     case(7)
+       lm (1:13) = (/ 0,+1,-1,+2,-2,+3,-3,+4,-4,+5,-5,+6,-6/)
+     case default
+       write(*,"(/,i4)") lq
+       call XError("Unknown Lq in sub. bas_lq_mkl!")
+   end select
+ else if(iprog == 1 .or. iprog == 2 .or. iprog == 4) then
+   select case(lq)
+     case(1)
+       lm (1: 1) = (/ 0/)
+     case(2)
+       if(iprog == 1) then
+         lm (1: 3) = (/-1, 0,+1/)
+       else
+         lm (1: 3) = (/+1,-1, 0/)
+       end if
+     case(3)
+       lm (1: 5) = (/-2, 0,+1,-1,+2/)
+     case(4)
+       lm (1: 7) = (/-3,-2, 0,+1,-1,+2,+3/)
+     case(5)
+       lm (1: 9) = (/-4,-3,-2, 0,+1,-1,+2,+3,+4/)
+     case(6)
+       lm (1:11) = (/-5,-4,-3,-2, 0,+1,-1,+2,+3,+4,+5/)
+     case(7)
+       lm (1:13) = (/-6,-5,-4,-3,-2, 0,+1,-1,+2,+3,+4,+5,+6/)
+     case default
+       write(*,"(/,i4)") lq
+       call XError("Unknown Lq in sub. bas_lq_order!")
+   end select
+ else
+   write(*,"(/,i4)") iprog
+   call XError("Unknown iprog in sub. bas_lq_order!")
+ end if
+
+ return
+end subroutine bas_lq_order
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+! print MOs for isym in Molpro (ipro = 0), BDF (1), Molcas (2), or Columbus (4 & 5) rasorb format
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 subroutine wr_mos(ipro,iras,isym,nbas,cmo)
@@ -1479,6 +2200,12 @@ subroutine wr_mos(ipro,iras,isym,nbas,cmo)
      write(iras,"('* ORBITAL',2i5)") isym, iorb
      write(iras,"(5es22.14)") cmo(:,iorb)
    end do
+ else if(ipro == 4 .or. ipro == 5) then    ! columbus
+   do iorb = 1, nbas
+     write(iras,"(3d25.15)") cmo(:,iorb)
+   end do
+ else
+   call XError("Unknown ipro in sub. wr_mos.")
  end if
 
  return
@@ -1510,10 +2237,16 @@ subroutine wr_occ_end(ipro,iout,ntotbs,nsym,nbas,occ)
      write(iout,"(5es22.14)") (occ(noff+i), i=1, nbas(isym))
      noff= noff + nbas(isym)
    end do
+   !write(iout,"('#OCHR')")
+   !write(iout,"('* OCCUPATION NUMBERS (HUMAN-READABLE)')")
+   !write(iout,"(10f8.4)") occ
  else if(ipro == 3) then    ! mkl
    write(iout,"('$OCC_ALPHA')")
    write(iout,"(5f12.7)") occ
    write(iout,"(' $END')")
+ else if(ipro == 4 .or. ipro == 5) then    ! columbus
+   write(iout,"('orbocc',/,'(1p3d25.15)')")
+   write(iout,"(3d25.15)") occ
  end if
 
  write(iout,"(//)")
@@ -1854,27 +2587,86 @@ end subroutine pr_head_new
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! print the head of Molcas RasOrb file
+! print the head of Molcas (ifmt=2) / Columbus (ifmt=4,5) RasOrb file
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine pr_head_ras(iras,nsym,nbas,irrep,ctmp)
+subroutine pr_head_ras(iras,ipro,ifmt,igrp,nsym,nbas,irrep,ctmp)
  implicit double precision (a-h,o-z)
  dimension nbas(nsym), irrep(*)
  character*(*) ctmp
 
  rewind(iras)
 
- ! MOLCAS lumorb
- write(iras,"('#INPORB 2.2')")
- write(iras,"('#INFO')")
- write(iras,"('* RASSCF canonical orbitals for CASPT2')")
- write(iras,"(3i8)") 0, nsym, 0            ! IUHF, NSYM, iWFtype
- write(iras,"(8i8)") (nbas(irrep(i)),i=1,nsym)    ! NBAS
- write(iras,"(8i8)") (nbas(irrep(i)),i=1,nsym)    ! NORB (= NBAS)
+ if(ifmt == 2) then
+   ! MOLCAS lumorb
+   write(iras,"('#INPORB 2.2')")
+   write(iras,"('#INFO')")
+   write(iras,"('* RASSCF canonical orbitals for CASPT2')")
+   write(iras,"(3i8)") 0, nsym, 0            ! IUHF, NSYM, iWFtype
+   write(iras,"(8i8)") (nbas(irrep(i)),i=1,nsym)    ! NBAS
+   write(iras,"(8i8)") (nbas(irrep(i)),i=1,nsym)    ! NORB (= NBAS)
 
- call fdate(ctmp)
- write(iras,"('*BC: Computed by Molpro and saved by OrbTran-II. ',a)") trim(ctmp)
- write(iras,"('#ORB')")
+   call fdate(ctmp)
+   if(ipro == 0) then
+     write(iras,"('*BC: Computed by Molpro and saved by OrbTran-II. ',a)") trim(ctmp)
+   else if(ipro == 1) then
+     write(iras,"('*BC: Computed by BDF and saved by OrbTran-II. ',a)") trim(ctmp)
+   end if
+   write(iras,"('#ORB')")
+ else if(ifmt == 4 .or. ifmt == 5) then
+   ! Columbus mocoef
+   write(iras,"(' 2mocoef',/,'header',/,20x,i2)") 4   ! 4 title lines
+   write(iras,"('MO-coefficients from mcscf.x')")
+   write(iras,"(' with dummy occupation 1.0 for active orbitals')")
+   write(iras,"(' total ao core energy =    0.000000000')")
+   write(iras,"('MCSCF energy =       0.000000000')")
+   write(iras,"(i22)") nsym
+   write(iras,"(3i22)") (nbas(irrep(i)),i=1,nsym),(nbas(irrep(i)),i=1,nsym)
+   if(ifmt == 4) then
+     ! Dalton Hermit integrals
+     select case(igrp)
+       case(1)  ! C1
+         write(iras,"(' A')")
+       case(2)  ! Cs
+         write(iras,"(' A    B')")
+       case(3)  ! C2
+         write(iras,"(' A''   A""')")
+       case(4)  ! Ci
+         write(iras,"(' Ag   Au')")
+       case(5)  ! C2v
+         write(iras,"(' A1   B1   B2   A2')")
+       case(6)  ! C2h
+         write(iras,"(' Ag   Bu   Au   Bg')")
+       case(7)  ! D2
+         write(iras,"(' A    B2   B1   B3')")
+       case(8)  ! D2h
+         write(iras,"(' Ag   B3u  B2u  B1g  B1u  B2g  B3g  Au')")
+     end select
+   else
+     ! Argos Hermit integrals
+     select case(igrp)
+       case(1)  ! C1
+         write(iras,"('   a')")
+       case(2)  ! Cs
+         write(iras,"('   a    b')")
+       case(3)  ! C2
+         write(iras,"('  a''   a""')")
+       case(4)  ! Ci
+         write(iras,"('  ag   au')")
+       case(5)  ! C2v
+         write(iras,"('  a1   a2   b1   b2')")
+       case(6)  ! C2h
+         write(iras,"('  ag   bg   au   bu')")
+       case(7)  ! D2
+         write(iras,"('   a   b1   b2   b3')")
+       case(8)  ! D2h
+         write(iras,"('  ag  b1g  b2g  b3g   au  b1u  b2u  b3u')")
+     end select
+   end if
+   write(iras,"('mocoef',/,'(1p3d25.15)')")
+ else
+   call XError("Unknown ifmt in sub. pr_head_ras.")
+ end if
 
  return
 end subroutine pr_head_ras
@@ -1913,16 +2705,20 @@ end subroutine set_irrep_symbol
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
 ! reorder irreps:
-! ipro = 0: Molpro -> BDF(0)/Molcas(1)/Orca(2)
-! ipro = 1: BDF -> Molpro(0)/Molcas(1)/Orca(2)
+! ipro = 0: Molpro -> BDF(1), Molcas(2), Orca/Gamess/Molden(3), Columbus(4), Argos-Columbus(5)
+! ipro = 1: BDF -> Molpro(0), Molcas(2), Orca/Gamess/Molden(3), Columbus(4), Argos-Columbus(5)
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine symmap(ipro,Imode,igrp,irrep)
+subroutine symmap(ipro,ifmt0,igrp,irrep)
  implicit double precision (a-h,o-z)
  dimension :: irrep(*)
 
+ ifmt = ifmt0
+ ! Gamess or Molden
+ if(ifmt0 ==6 .or. ifmt0 ==10) ifmt = 3
+
  if(ipro == 0) then
-   if(Imode == 0 .or. Imode == 2) then
+   if(ifmt == 1 .or. ifmt == 3 .or. ifmt == 5) then
      select case(igrp)
        case(1)  ! C1
          !     Molpro:    a
@@ -1957,47 +2753,58 @@ subroutine symmap(ipro,Imode,igrp,irrep)
          !   BDF/Orca:   ag b1g b2g b3g  au b1u b2u b3u  (Ver. >= 2023.3.12)
          irrep(1:8) = (/  1,  4,  6,  7,  8,  5,  3,  2/)
      end select
-   else if(Imode == 1) then
+   else if(ifmt == 2 .or. ifmt == 4) then
      select case(igrp)
        case(1)  ! C1
          !     Molpro:    a
          !     Molcas:    a
+         !     Columbus: same as Molcas
          irrep(1:1) = (/  1/)
        case(2)  ! Cs
          !     Molpro:   a'  a"
          !     Molcas:   a'  a"
+         !     Columbus: same as Molcas
          irrep(1:2) = (/  1,  2/)
        case(3)  ! C2
          !     Molpro:    a   b
          !     Molcas:    a   b
+         !     Columbus: same as Molcas
          irrep(1:2) = (/  1,  2/)
        case(4)  ! Ci
          !     Molpro:   ag  au
          !     Molcas:   ag  au
+         !     Columbus: same as Molcas
          irrep(1:2) = (/  1,  2/)
        case(5)  ! C2v
          !     Molpro:   a1  b1  b2  a2
          !     Molcas:   a1  b1  b2  a2
+         !     Columbus: same as Molcas
          irrep(1:4) = (/  1,  2,  3,  4/)
        case(6)  ! C2h
          !     Molpro:   ag  au  bu  bg
          !     Molcas:   ag  bu  au  bg
+         !     Columbus: same as Molcas
          irrep(1:4) = (/  1,  3,  2,  4/)
        case(7)  ! D2
          !     Molpro:    a  b3  b2  b1
+         if(ifmt == 2) then
          !     Molcas:    a  b3  b2  b1, but labelled as:   a  b2  b1  b3
-         ! irrep(1:4) = (/  1,  3,  4,  2/)
-         irrep(1:4) = (/  1,  2,  3,  4/)
+           irrep(1:4) = (/  1,  2,  3,  4/)
+         else if(ifmt == 4) then
+         !     Columbus:  a  b2  b1  b3
+           irrep(1:4) = (/  1,  3,  4,  2/)
+         end if
        case(8)  ! D2h
          !     Molpro:   ag b3u b2u b1g b1u b2g b3g  au
          !     Molcas:   ag b3u b2u b1g b1u b2g b3g  au
+         !     Columbus: same as Molcas
          irrep(1:8) = (/  1,  2,  3,  4,  5,  6,  7,  8/)
      end select
    else
-     call XError("Unknown Imode in sub. symmap.")
+     call XError("Unknown ifmt in sub. symmap.")
    end if
  else if(ipro == 1) then
-   if(Imode == 0) then
+   if(ifmt == 0) then
      select case(igrp)
        case(1)  ! C1
          !        BDF:    a
@@ -2032,43 +2839,55 @@ subroutine symmap(ipro,Imode,igrp,irrep)
          !     Molpro:   ag b3u b2u b1g b1u b2g b3g  au
          irrep(1:8) = (/  1,  8,  7,  2,  6,  3,  4,  5/)
      end select
-   else if(Imode == 1) then
+   else if(ifmt == 2 .or. ifmt == 4) then
      select case(igrp)
        case(1)  ! C1
          !        BDF:    a
          !     Molcas:    a
+         !     Columbus: same as Molcas
          irrep(1:1) = (/  1/)
        case(2)  ! Cs
          !        BDF:   a'  a"
          !     Molcas:   a'  a"
+         !     Columbus: same as Molcas
          irrep(1:2) = (/  1,  2/)
        case(3)  ! C2
          !        BDF:    a   b
          !     Molcas:    a   b
+         !     Columbus: same as Molcas
          irrep(1:2) = (/  1,  2/)
        case(4)  ! Ci
          !        BDF:   ag  au
          !     Molcas:   ag  au
+         !     Columbus: same as Molcas
          irrep(1:2) = (/  1,  2/)
        case(5)  ! C2v
          !        BDF:   a1  a2  b1  b2
          !     Molcas:   a1  b1  b2  a2
+         !     Columbus: same as Molcas
          irrep(1:4) = (/  1,  3,  4,  2/)
        case(6)  ! C2h
          !        BDF:   ag  bg  au  bu
          !     Molcas:   ag  bu  au  bg
+         !     Columbus: same as Molcas
          irrep(1:4) = (/  1,  4,  3,  2/)
        case(7)  ! D2
          !        BDF:    a  b1  b2  b3  (Ver. >= 2023.3.12)
+         !     Columbus:  a  b2  b1  b3
+         if(ifmt == 2) then
          !     Molcas:    a  b3  b2  b1, but labelled as:   a  b2  b1  b3
-         ! irrep(1:4) = (/  1,  3,  2,  4/)
-         irrep(1:4) = (/  1,  4,  3,  2/)
+           irrep(1:4) = (/  1,  4,  3,  2/)
+         else if(ifmt == 4) then
+         !     Columbus:  a  b2  b1  b3
+           irrep(1:4) = (/  1,  3,  2,  4/)
+         end if
        case(8)  ! D2h
          !        BDF:   ag b1g b2g b3g  au b1u b2u b3u  (Ver. >= 2023.3.12)
          !     Molcas:   ag b3u b2u b1g b1u b2g b3g  au
+         !     Columbus: same as Molcas
          irrep(1:8) = (/  1,  8,  7,  2,  6,  3,  4,  5/)
      end select
-   else if(Imode == 2) then
+   else if(ifmt == 3 .or. ifmt == 5) then
      select case(igrp)
        case(1)    ! C1
          irrep(1:1) = (/  1/)
@@ -2080,10 +2899,10 @@ subroutine symmap(ipro,Imode,igrp,irrep)
          irrep(1:8) = (/  1,  2,  3,  4,  5,  6,  7,  8/)
      end select
    else
-     call XError("Unknown Imode in sub. symmap.")
+     call XError("Unknown ifmt in sub. symmap.")
    end if
  else
-   call XError("Unknown ipro in sub. symmap.")
+   call XError("Unknown Ipro in sub. symmap.")
  end if
 
  return
@@ -2362,10 +3181,11 @@ end subroutine ElemZA
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! Return IZA corresponding to the element name
+! 0: Return IZA corresponding to the element name
+! 1: Return the element name corresponding to IZA
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine elementname(elename, iza)
+subroutine elementname(imod,elename, iza)
  implicit double precision (a-h,o-z)
  parameter(maxza = 118)
  character*13 :: elename, enamelib(maxza)
@@ -2396,13 +3216,18 @@ subroutine elementname(elename, iza)
    'Roentgenium  ', 'Copernicium  ', 'Nihonium     ', 'Flerovium    ', 'Moscovium    ', &
    'Livermorium  ', 'Tennessine   ', 'Oganesson    '/)
 
- iza = 0
- do i = 1, maxza
-   if(trim(elename) == trim(enamelib(i))) then
-     iza = i
-     exit
-   end if
- end do
+ if(imod == 0) then
+   iza = 0
+   do i = 1, maxza
+     if(trim(elename) == trim(enamelib(i))) then
+       iza = i
+       exit
+     end if
+   end do
+ else
+   if(iza < 1 .or. iza > maxza) call XError("IZA error in sub. elementname!")
+   elename = trim(enamelib(iza))
+ end if
 
 end subroutine elementname
 
@@ -2560,41 +3385,31 @@ end subroutine save_bas_bdf
 !
 ! Arguments.
 !
-! -PRO   The output file and mcscf wf file are produced by Molpro or BDF.
+! -PRO   The output file and mcscf wf file are produced by Molpro (ipro = 0) or BDF (ipro = 1).
 !        Default: determined by the canonical_mo_coeff file (see -MOS).
 !
-! -PRO   Molpro (ipro = 0)
-! ------------------------
 ! read:
-!  -LOG                    Molpro's mcscf_log_file.           # Default: mcscf.out
+! ------------------------
+!  -LOG                    Molpro's or BDF's mcscf_log_file.  # Default: mcscf.out
 !  -n N                    the N-th MCSCF output in LOG       # Default: N = 1
-!  -MOS                    Molpro's canonical_mo_coeff_file.  # Default: mcscf.casorb
+!  -MOS                    canonical_mo_coeff_file.           # Default: mcscf.casorb
 !  -OPR                    a file for orbital operations      # No default. see subroutine orbopr
 !                          (it affects only -NEW)
-! write:
-!  -OUT:MOLCAS   (= -RAS)  Molcas RASSCF coeff. file.         # No default
-!  -OUT:BDF      (= -BDF)  BDF MCSCF coeff. file.             # No default
-!  -OUT:MOLEKEL  (= -MKL)  MOLEKEL file used by ORCA.         # No default
-!  -OUT:MOLDEN   (= -MDN)  MOLDEN file.                       # No default
-!  -OUT:NEW      (= -NEW)  New Molpro MCSCF coeff. file.      # Default: new_mcscf.casorb if -OPR is specified
 !
-! -PRO   BDF (ipro = 1)
-! ---------------------
-! read:
-!  -LOG                    BDF's mcscf_log_file.              # Default: mcscf.out
-!  -n N                    the N-th MCSCF output in LOG       # Default: N = 1
-!  -MOS                    BDF's canonical_mo_coeff_file.     # Default: mcscf.casorb
-!  -OPR                    a file for orbital operations      # No default
-!                          (it affects only -NEW)
 ! write:
+! ---------------------
 !  -OUT:MOLCAS   (= -RAS)  Molcas RASSCF coeff. file.         # No default
-!  -OUT:MOLPRO   (= -MOL)  MOLPRO MCSCF coeff. file.          # No default
+!  -OUT:BDF      (= -BDF)  BDF MCSCF coeff. file.             # No default; for Molpro only
+!  -OUT:MOLPRO   (= -MOL)  MOLPRO MCSCF coeff. file.          # No default; for BDF only
+!  -OUT:COLUMBUS (= -COL)  Dalton-Columbus MCSCF coeff. file. # No default
+!  -OUT:ARGOS    (= -ARG)  Argos-Columbus MCSCF coeff. file.  # No default
 !  -OUT:MOLEKEL  (= -MKL)  MOLEKEL file used by ORCA.         # No default
+!  -OUT:GAMESS   (= -GAM)  PUNCH file used by Firefly/GAMESS. # No default
 !  -OUT:MOLDEN   (= -MDN)  MOLDEN file.                       # No default
 !  -OUT:NEW      (= -NEW)  New BDF MCSCF coeff. file.         # Default: new_mcscf.casorb if -OPR is specified
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,imode,ctmp)
+subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,icol,iarg,igam,i_stp,nmode,imode,ctmp)
  implicit real(kind=8) (a-h,o-z)
  dimension :: imode(nmode)
  character*200 :: ctmp
@@ -2609,6 +3424,9 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
  ! 4 : BDF to Molpro
  ! 5 : Molpro/BDF to Molekel
  ! 6 : Molpro/BDF to Molden
+ ! 7 : Molpro/BDF to Columbus(Dalton)
+ ! 8 : Molpro/BDF to Columbus(Argos)
+ ! 9 : Molpro/BDF to Firefly/GAMESS
 
  i = 0
  do while(.true.)
@@ -2624,7 +3442,9 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.true.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(ctmp(istr:iend) == 'MOLPRO') then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
+       call XError("No program name provided for -PRO.")
+     else if(ctmp(istr:iend) == 'MOLPRO') then
        ipro = 0
      else if(ctmp(istr:iend) == 'BDF') then
        ipro = 1
@@ -2634,7 +3454,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -LOG.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2650,7 +3470,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -MOS.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2666,7 +3486,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OPR.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2682,7 +3502,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("i_stp is not provided for -N.")
      else
        call chknumber(-1,ctmp(istr:iend))
@@ -2697,7 +3517,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OUT:NEW.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2714,7 +3534,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OUT:MOLCAS.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2731,7 +3551,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OUT:BDF.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2748,7 +3568,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OUT:MOLPRO.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2765,7 +3585,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OUT:MOLEKEL.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2782,7 +3602,7 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
      call Get1Cmd(i,.False.,ctmp)
      istr=nonspace(ctmp)
      iend=len_trim(ctmp)
-     if(iend == 0) then
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
        call XError("No file name provided for -OUT:MOLDEN.")
      else
        inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
@@ -2794,6 +3614,57 @@ subroutine RdArg(ipro,ilog,imos,iopr,inew,iras,ibdf,imol,imkl,imdn,i_stp,nmode,i
        end if
      end if
      imode(6) = 1
+   else if(ctmp(istr:iend) == '-OUT:COLUMBUS' .or. ctmp(istr:iend) == '-COL') then
+     i = i + 1
+     call Get1Cmd(i,.False.,ctmp)
+     istr=nonspace(ctmp)
+     iend=len_trim(ctmp)
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
+       call XError("No file name provided for -OUT:COLUMBUS.")
+     else
+       inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
+       call chkfile(ctmp(istr:iend),1,ifopen,0,ifexist)
+       open(icol,file=ctmp(istr:iend),iostat=ist)
+       if(ist /= 0) then
+         write(*,"(/,' File: ',a)") ctmp(istr:iend)
+         call XError("Cannot creat Columbus(Dalton) RasOrb file.")
+       end if
+     end if
+     imode(7) = 1
+   else if(ctmp(istr:iend) == '-OUT:ARGOS' .or. ctmp(istr:iend) == '-ARG') then
+     i = i + 1
+     call Get1Cmd(i,.False.,ctmp)
+     istr=nonspace(ctmp)
+     iend=len_trim(ctmp)
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
+       call XError("No file name provided for -OUT:ARGOS.")
+     else
+       inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
+       call chkfile(ctmp(istr:iend),1,ifopen,0,ifexist)
+       open(iarg,file=ctmp(istr:iend),iostat=ist)
+       if(ist /= 0) then
+         write(*,"(/,' File: ',a)") ctmp(istr:iend)
+         call XError("Cannot creat Columbus(Argos) RasOrb file.")
+       end if
+     end if
+     imode(8) = 1
+   else if(ctmp(istr:iend) == '-OUT:GAMESS' .or. ctmp(istr:iend) == '-GAM') then
+     i = i + 1
+     call Get1Cmd(i,.False.,ctmp)
+     istr=nonspace(ctmp)
+     iend=len_trim(ctmp)
+     if(iend == 0 .or. (istr > 0 .and. ctmp(istr:istr) == '-')) then
+       call XError("No file name provided for -OUT:GAMESS.")
+     else
+       inquire(file=ctmp(istr:iend),opened=ifopen,exist=ifexist)
+       call chkfile(ctmp(istr:iend),1,ifopen,0,ifexist)
+       open(igam,file=ctmp(istr:iend),iostat=ist)
+       if(ist /= 0) then
+         write(*,"(/,' File: ',a)") ctmp(istr:iend)
+         call XError("Cannot creat GAMESS PUNCH file.")
+       end if
+     end if
+     imode(9) = 1
    else
      call XError("Unknown argument "//ctmp(istr:iend))
    end if
@@ -3040,5 +3911,3 @@ subroutine XError(inf)
 end subroutine XError
 
 !--- END
-
-
