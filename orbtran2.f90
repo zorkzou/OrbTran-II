@@ -33,7 +33,8 @@
 ! Oct. 03, 2026. RasOrb format used by Columbus MCSCF module, with Dalton (up to l = 5) or Argos (up to l = 4) integrals.
 !                To be tested.
 ! Oct. 26, 2026. PUNCH format used by GAMESS-US and Firefly.
-! Oct. 29, 2026. Columbus' RasOrb format using the Argos integral model.
+! Oct. 29, 2026. Columbus' mocoef format using Argos integrals.
+! Nov. 03, 2026. Columbus' mocoef format using Dalton integrals.
 !
 ! Note
 ! 1) The atoms computed by different programs must be in the same ordering and the same orientation.
@@ -122,7 +123,7 @@ program orbtran2
 !    ifmt == 1 BDF
 !    ifmt == 2 Molcas
 !    ifmt == 3 MKL
-!    ifmt == 4 Columbus(Dalton), disabled
+!    ifmt == 4 Columbus(Dalton)
 !    ifmt == 5 Columbus(Argos)
 !    ifmt == 6 Gamess
 !    ifmt ==10 Molden
@@ -204,35 +205,30 @@ program orbtran2
 
  ! molpro/bdf --> columbus(dalton)
  if(imode(7) == 1) then
-   write(*,"(/,' Columbus(Dalton): disabled feature.')")
-   ! ...............................................................................................
-   ! 
-   ! Dalton is limited to non-relativistic all-electron integrals.
-   ! The following codes support only sp-functions without symmetrically equivalent atoms; in other
-   ! cases, the normalization factors are not correct.
-   !
-   ! ...............................................................................................
-
-   !ifmt = 4
-   !call symmap(ipro,ifmt,igrp,irrep)
-   !call pr_head_ras(icol,ipro,ifmt,igrp,nsym,nbas,irrep,ctmp)
-   !loff = 0
-   !do isym = 1, nsym
-   !  isym1 = irrep(isym)
-   !  if(nbas(isym1) < 1) cycle
-   !  moff = 0
-   !  noff = 0
-   !  do i = 1, isym1-1
-   !    moff = moff + nbas(i)
-   !    noff = noff + nbas(i)**2
-   !  end do
-   !  call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
-   !  call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
-   !  ! now MOs saved in scr are in column vector
-   !  call wr_mos(ifmt,icol,isym,nbas(isym1),scr)
-   !  loff = loff + nbas(isym1)
-   !end do
-   !call wr_occ_end(ifmt,icol,ntotbs,nsym,nbas,occ2)
+   ifmt = 4
+   call symmap(ipro,ifmt,igrp,irrep)
+   call pr_head_ras(icol,ipro,ifmt,igrp,nsym,nbas,irrep,ctmp)
+   loff = 0
+   allocate(sclfac(mbas))
+   do isym = 1, nsym
+     isym1 = irrep(isym)
+     if(nbas(isym1) < 1) cycle
+     moff = 0
+     noff = 0
+     do i = 1, isym1-1
+       moff = moff + nbas(i)
+       noff = noff + nbas(i)**2
+     end do
+     call basmap(natom,maxlq,ifmt,nbas(isym1),infobs(1,moff+1),ibmap)
+     call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
+     ! Now MOs saved in scr are in column vector.
+     ! Columbus uses non-standard normalization factors, so the MO coefficients need to be scaled.
+     call scalmo_col(ifmt,nbas(isym1),infobs(1,moff+1),ibmap,sclfac,scr)
+     call wr_mos(ifmt,icol,isym,nbas(isym1),scr)
+     loff = loff + nbas(isym1)
+   end do
+   deallocate(sclfac)
+   call wr_occ_end(ifmt,icol,ntotbs,nsym,nbas,occ2)
    close(icol)
  end if
 
@@ -256,7 +252,7 @@ program orbtran2
      call reorderbs(nbas(isym1),.true.,ibmap,occ1(moff+1),occ2(loff+1),cmo(noff+1),scr)
      ! Now MOs saved in scr are in column vector.
      ! Columbus uses non-standard normalization factors, so the MO coefficients need to be scaled.
-     call scalmo_col(nbas(isym1),infobs(1,moff+1),ibmap,sclfac,scr)
+     call scalmo_col(ifmt,nbas(isym1),infobs(1,moff+1),ibmap,sclfac,scr)
      call wr_mos(ifmt,iarg,isym,nbas(isym1),scr)
      loff = loff + nbas(isym1)
    end do
@@ -1186,17 +1182,26 @@ end subroutine rd_group
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
-! scaling factors for Columbus (C2v symmetry)
+! scaling factors for Columbus. ifmt = 4: dalton integrals; = 5: argos integrals
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-subroutine scalmo_col(nbas,infobs,ibmap,scal,cmo)
+subroutine scalmo_col(ifmt,nbas,infobs,ibmap,scal,cmo)
  implicit real(kind=8) (a-h,o-z)
  dimension infobs(3,nbas), ibmap(nbas), scal(nbas), cmo(nbas,nbas)
 
- do ibs = 1, nbas
-   jbs = ibmap(ibs)
-   scal(ibs) = fac_col(infobs(2,jbs),infobs(3,jbs))
- end do
+ if(ifmt == 4) then
+   do ibs = 1, nbas
+     jbs = ibmap(ibs)
+     scal(ibs) = fac_dal(infobs(2,jbs),infobs(3,jbs))
+   end do
+ else if(ifmt == 5) then
+   do ibs = 1, nbas
+     jbs = ibmap(ibs)
+     scal(ibs) = fac_arg(infobs(2,jbs),infobs(3,jbs))
+   end do
+ else
+   call XError('Unknown ifmt in sub. scalmo_col.')
+ end if
 
  do ibs = 1, nbas
    do jbs = 1, nbas
@@ -1208,16 +1213,104 @@ subroutine scalmo_col(nbas,infobs,ibmap,scal,cmo)
 
  contains
 
-! irrep   ml     factor          irrep   ml     factor          irrep   ml     factor
-! -----------------------------  -----------------------------  -----------------------------
-! a1      d0     * 1/sqrt(12)    a2      d2-    * 1             b1/b2   d1+/-  * 1
-!         d2+    * 1/2                                                  f1+/-  * 1/sqrt(40)
-!         f0     * 1/sqrt(60)            f2-    * 1                     f3-    * 1/sqrt(24)
-!         f2+    * 1/2                                                  f3+    *-1/sqrt(24)
-!         g0     *-1/sqrt(6720)          g2-    *-1/sqrt(84)            g1+/-  * 1/sqrt(168)
-!         g2+    *-1/sqrt(336)           g4-    * 1/sqrt(12)            g3-    * 1/sqrt(24)
-!         g4+    * 1/sqrt(192)                                          g3+    *-1/sqrt(24)
- function fac_col(lq,ml)
+! ml   factor          ml   factor          ml   factor          ml   factor          ml   factor          ml   factor
+! -------------------  -------------------  -------------------  -------------------  -------------------  -------------------
+! d0     1/sqrt(12)    d1+/-  1             d2-    1
+!                                           d2+    1/2
+! f0    -1/sqrt(20/3)  f1+/-  1/sqrt(40)    f2-    1             f3-    1/sqrt(24)
+!                                           f2+    1/2           f3+   -1/sqrt(8/3)
+! g0    -1/sqrt(35/3)  g1+/-  1/sqrt(56/3)  g2-    1/sqrt(84)    g3-    1/sqrt(24)    g4-    1/sqrt(12)
+!                                           g2+    1/sqrt(336)   g3+   -1/sqrt(8/3)   g4+   -1/sqrt(16/3)
+! h0   -1/sqrt(189/5)  h1+/- -1/sqrt(28)    h2-    1/6           h3-    1/sqrt(3456)  h4-    1/sqrt(12)    h5+/- -1/sqrt(96/5)
+!                                           h2+    1/12          h3+   -1/sqrt(6)     h4+   -1/sqrt(16/3)
+ function fac_dal(lq,ml)
+  implicit real(kind=8) (a-h,o-z)
+ 
+  select case(lq)
+    case(1,2)
+      a = 1.0d0
+    case(3)
+      select case(ml)
+        case(0)
+          a = 1.0d0/sqrt(12.0d0)
+        case(2)
+          a = 0.5d0
+        case default
+          a = 1.0d0
+      end select
+    case(4)
+      select case(ml)
+        case(0)
+          a =-1.0d0/sqrt(20.0d0/3.0d0)
+        case(-1,1)
+          a = 1.0d0/sqrt(40.0d0)
+        case(-2)
+          a = 1.0d0
+        case(2)
+          a = 0.5d0
+        case(-3)
+          a = 1.0d0/sqrt(24.0d0)
+        case(3)
+          a =-1.0d0/sqrt(8.0d0/3.0d0)
+      end select
+    case(5)
+      select case(ml)
+        case(0)
+          a =-1.0d0/sqrt(35.0d0/3.0d0)
+        case(-1,1)
+          a = 1.0d0/sqrt(56.0d0/3.0d0)
+        case(-2)
+          a = 1.0d0/sqrt(84.0d0)
+        case(2)
+          a = 1.0d0/sqrt(336.0d0)
+        case(-3)
+          a = 1.0d0/sqrt(24.0d0)
+        case(3)
+          a =-1.0d0/sqrt(8.0d0/3.0d0)
+        case(-4)
+          a = 1.0d0/sqrt(12.0d0)
+        case(4)
+          a =-1.0d0/sqrt(16.0d0/3.0d0)
+      end select
+    case(6)
+      select case(ml)
+        case(0)
+          a =-1.0d0/sqrt(189.0d0/5.0d0)
+        case(-1,1)
+          a =-1.0d0/sqrt(28.0d0)
+        case(-2)
+          a = 1.0d0/6.0d0
+        case(2)
+          a = 1.0d0/12.0d0
+        case(-3)
+          a = 1.0d0/sqrt(3456.0d0)
+        case(3)
+          a =-1.0d0/sqrt(6.0d0)
+        case(-4)
+          a = 1.0d0/sqrt(12.0d0)
+        case(4)
+          a =-1.0d0/sqrt(16.0d0/3.0d0)
+        case(-5,5)
+          a =-1.0d0/sqrt(96.0d0/5.0d0)
+      end select
+    case default
+      call XError('LQ > 6 in func. fac_dal.')
+  end select
+ 
+  fac_dal = a
+ 
+  return
+ end function fac_dal
+
+! ml   factor          ml   factor          ml   factor          ml   factor          ml   factor
+! -------------------  -------------------  -------------------  -------------------  -------------------
+! d0     1/sqrt(12)    d1+/-  1             d2-    1
+!                                           d2+    1/2
+! f0     1/sqrt(60)    f1+/-  1/sqrt(40)    f2-    1             f3-    1/sqrt(24)
+!                                           f2+    1/2           f3+   -1/sqrt(24)
+! g0    -1/sqrt(6720)  g1+/-  1/sqrt(168)   g2-   -1/sqrt(84)    g3-    1/sqrt(24)    g4-    1/sqrt(12)
+!                                           g2+   -1/sqrt(336)   g3+   -1/sqrt(24)    g4+    1/sqrt(192)
+ function fac_arg(lq,ml)
   implicit real(kind=8) (a-h,o-z)
  
   select case(lq)
@@ -1267,13 +1360,13 @@ subroutine scalmo_col(nbas,infobs,ibmap,scal,cmo)
           a = 1.0d0/sqrt(192.0d0)
       end select
     case default
-      call XError('LQ > 5 in func. fac_col.')
+      call XError('LQ > 5 in func. fac_arg.')
   end select
  
-  fac_col = a
+  fac_arg = a
  
   return
- end function fac_col
+ end function fac_arg
 
 end subroutine scalmo_col
 

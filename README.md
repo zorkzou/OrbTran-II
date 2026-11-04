@@ -23,9 +23,12 @@ See the following references for its applications.
 
 ## Recent Changes
 
+* 11/04/2026. Convert to mocoef format of [Columbus](https://gitlab.com/columbus-program-system/columbus)
+(`Dalton` integrals).
+
 * 10/29/2026. Convert to PUNCH format of
 [GAMESS](https://www.msg.chem.iastate.edu/gamess/index.html)/[Firefly](http://classic.chem.msu.su/gran/gamess/),
-and mocoef format of [Columbus](https://gitlab.com/columbus-program-system/columbus).
+and mocoef format of [Columbus](https://gitlab.com/columbus-program-system/columbus) (`Argos` integrals).
 
 ## Features
 
