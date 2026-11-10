@@ -42,7 +42,7 @@ and mocoef format of [Columbus](https://gitlab.com/columbus-program-system/colum
 [Molpro](http://www.molpro.net/).
 2. MOLEKEL format used by [Orca](https://www.faccts.de/orca/)
 (up to _h_-functions). Symmetry-equivalent atoms are not supported.
-3. mocoef format used by [Columbus](https://gitlab.com/columbus-program-system/columbus) `MCSCF` module combined with `Argos` integrals up to _g_-functions. Symmetry-equivalent atoms are not supported.
+3. mocoef format used by [Columbus](https://gitlab.com/columbus-program-system/columbus) `MCSCF` module combined with `Argos` integrals up to _g_-functions or `Dalton` integrals up to _h_-functions. Symmetry-equivalent atoms are not supported.
 4. PUNCH format used by [GAMESS](https://www.msg.chem.iastate.edu/gamess/index.html) and
 [Firefly](http://classic.chem.msu.su/gran/gamess/)
 (PC-GAMESS). Symmetry-equivalent atoms are not supported.
